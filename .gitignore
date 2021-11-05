@@ -1,0 +1,7 @@
+data/
+model/
+log/
+dev/
+loss/
+pic/
+__pycache__/
