@@ -5,67 +5,110 @@ import json
 import csv
 import pickle
 
+
+def remove_time(str_sentence):
+    str_sentence = re.sub('^[^\)]*:[^\)]*\)', "", str_sentence)
+    str_sentence = re.sub('\([^\)]*$', "", str_sentence)
+    return str_sentence
+
+def remove_newline(str_sentence):
+    str_sentence = re.sub('\s+'," ",str_sentence)
+    return str_sentence
+
+def process_string(str_sentence):
+    str_sentence = remove_time(str_sentence)
+    str_sentence = remove_newline(str_sentence)
+    str_sentence = str_sentence.strip()
+    return str_sentence
+
 def clean_data():
     tsv_file = open("./data/opus.ha-en.tsv")
     read_tsv = csv.reader(tsv_file, delimiter="\t")
 
-    f1 = open("./data/train_no_clean.en", "w")
-    f2 = open("./data/train_no_clean.ha", "w")
-    f3 = open("./data/batch_noise_data_only_return.json", "w")
+    f1 = open("./data/train_clean.en", "w")
+    f2 = open("./data/train_clean.ha", "w")
+    f3 = open("./data/batch_noise_data.json", "w")
 
     src_num = 0 
     trg_num = 0
 
-    batch_size = 256
-
-    batch_noise_data = []
-    batch_contain_return = 0
-    batch_contain_none = 0
-    batch_contain_brackets = 0
-    total_contain_return = 0
-    total_contain_none = 0
-    total_contain_brackets = 0
+    filtered = 0
+    
+    # batch_size = 256
+    # batch_noise_data = []
+    # batch_contain_return = 0
+    # batch_contain_none = 0
+    # batch_contain_brackets = 0
+    # total_contain_return = 0
+    # total_contain_none = 0
+    # total_contain_brackets = 0
 
     for idx, row in enumerate(read_tsv):
-        src = row[0].strip()
-        trg = row[1].strip()
+        source = row[0].strip()
+        target = row[1].strip()
         
-        if idx % batch_size == 0:
-            batch_noise_data.append((batch_contain_return, batch_contain_none, batch_contain_brackets))
-            batch_contain_return = 0
-            batch_contain_none = 0
-            batch_contain_brackets = 0
+        # if idx % batch_size == 0:
+        #     batch_noise_data.append((batch_contain_return, batch_contain_none, batch_contain_brackets))
+        #     batch_contain_return = 0
+        #     batch_contain_none = 0
+        #     batch_contain_brackets = 0
             
-        if "\n" in src or "\n" in trg:
-            # print(f"src:{src} \n tgt:{trg}")
-            batch_contain_return += 1
-            total_contain_return += 1
-            continue
-        if src is None or trg is None:
-            # print(f"idx:{idx}, src:{src} \n tgt:{trg}")
-            batch_contain_none += 1
-            total_contain_none += 1
-            continue
+        # if "\n" in src or "\n" in trg:
+        #     # print(f"src:{src} \n tgt:{trg}")
+        #     batch_contain_return += 1
+        #     total_contain_return += 1
+        #     continue
+        # if src is None or trg is None:
+        #     # print(f"idx:{idx}, src:{src} \n tgt:{trg}")
+        #     batch_contain_none += 1
+        #     total_contain_none += 1
+        #     continue
         # if re.search(r'.*:.*\) ', trg) or re.search(r'\(.*', trg):
         #     # print(f"idx:{idx}, src:{src} \n tgt:{trg}")
         #     trg = re.sub(r'.*:.*\) ', "", trg)
         #     trg = re.sub(r'\(.*', "", trg)
         #     batch_contain_brackets += 1
         #     total_contain_brackets += 1
-        
-        f1.write(src + "\n")
-        src_num += 1
-        f2.write(trg + "\n")
-        trg_num += 1
 
-    json.dump(batch_noise_data, f3)
+        src = source.lower()
+        trg = target.lower()
+        src = process_string(src)
+        trg = process_string(trg)
+
+        if len(src) != 0 and len(trg) != 0:
+            f1.write(src + "\n")
+            src_num += 1
+            f2.write(trg + "\n")
+            trg_num += 1
+        else:
+            filtered += 1
+            print(f"idx:{idx}")
+            print(f"Original source:{source}, target:{target}")
+            print(f"After processed, source:{src}, target:{trg}")
+            print("\n")
+
+    # json.dump(batch_noise_data, f3)
 
     f1.close()
     f2.close()
     f3.close()
 
-    print(f"Total num:{idx}, src num:{src_num}, trg num:{trg_num}")
-    print(f"Total_contain_return:{total_contain_return}, total_contain_none:{total_contain_none}, total_contain_brackets:{total_contain_brackets}")
+    print(f"Total num:{idx}, filtered num:{filtered}, src num:{src_num}, trg num:{trg_num}")
+    # print(f"Total_contain_return:{total_contain_return}, total_contain_none:{total_contain_none}, total_contain_brackets:{total_contain_brackets}")
+
+    f1 = open("./data/dev.en", "w")
+    f2 = open("./data/dev.ha", "w")
+    with open("./dev/xml/newsdev2021.en-ha.en", "r") as f:
+        data = f.readlines()
+        for d in data:
+            f1.write(d.lower())
+    f1.close()
+    with open("./dev/xml/newsdev2021.en-ha.ha", "r") as f:
+        data = f.readlines()
+        for d in data:
+            f2.write(d.lower())
+    f2.close()
+    
 
 
 def create_data(args, logger):
@@ -176,25 +219,30 @@ def create_data(args, logger):
 
             # processing target data
             trg_data = split_target_data[idx]
+            trg_padding_ids = np.ones([args.max_trg_len], dtype=int)
             trg_tok_ids = np.ones([args.max_trg_len], dtype=int) * target_pad_idx
             for i, token in enumerate(trg_data):
                 if i == 0: 
                     trg_tok_ids[i] = target_go_idx
+                    trg_padding_ids[i] = 0
                 if token in target_vocab:
                     tok_id = target_vocab[token]
                 else:
                     tok_id = target_unk_idx
                 if i+1 < args.max_trg_len:
                     trg_tok_ids[i+1] = tok_id
+                    trg_padding_ids[i+1] = 0
             if i+2 < args.max_trg_len:
                 trg_tok_ids[i+2] = target_eos_idx
+                trg_padding_ids[i+2] = 0
+            
+            processed_data.append((src_tok_ids, src_padding_ids, trg_tok_ids, trg_padding_ids))
 
-            processed_data.append((src_tok_ids, src_padding_ids, trg_tok_ids))
 
         with open(save_path, "wb") as f:
             pickle.dump(processed_data, f)
         logger.info("finish preprocessing data for {}, store data in {}".format(mode, save_path))
-        
+
 
 if __name__ == '__main__':
     clean_data()

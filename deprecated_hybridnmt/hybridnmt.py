@@ -50,8 +50,8 @@ def set_args():
     parser.add_argument('--enc_n_head', default=8, type=int, required=False, help='')
     parser.add_argument('--enc_n_layer', default=2, type=int, required=False, help='')
     parser.add_argument('--dec_n_layer', default=2, type=int, required=False, help='')
-    parser.add_argument('--enc_dropout', default=0.1, type=float, required=False, help='')
-    parser.add_argument('--dec_dropout', default=0.3, type=float, required=False, help='')
+    parser.add_argument('--enc_dropout', default=0.5, type=float, required=False, help='')
+    parser.add_argument('--dec_dropout', default=0.5, type=float, required=False, help='')
     
     parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
     parser.add_argument('--shuffle', default=True, type=bool, required=False, help='whether to shuffle the training dataset when loading')
@@ -60,7 +60,7 @@ def set_args():
 
     parser.add_argument('--epochs', default=50, type=int, required=False, help='')
     parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
-    parser.add_argument('--lr', default=1.0e-03, type=float, required=False, help='learning rate')
+    parser.add_argument('--lr', default=1.0e-04, type=float, required=False, help='learning rate')
     parser.add_argument('--eps', default=1.0e-06, type=float, required=False, help='')
     parser.add_argument('--weight_decay', default=1.0e-04, type=float, required=False, help='')
     parser.add_argument('--gradient_accumulation_steps', default=4, type=int, required=False, help='')
@@ -153,42 +153,30 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class FairseqAttention(nn.Module):
+class Attention(nn.Module):
     def __init__(self, enc_out_dim, emb_dim, dec_hid_dim):
         super().__init__()
         
-        # self.attn = nn.Linear(enc_out_dim + dec_hid_dim, dec_hid_dim)
-        # self.v = nn.Linear(dec_hid_dim, 1, bias = False)
-        self.input_proj = nn.Linear(dec_hid_dim, enc_out_dim)
-        self.output_proj = nn.Linear(dec_hid_dim + enc_out_dim, dec_hid_dim)
-
-
+        self.attn = nn.Linear(enc_out_dim + dec_hid_dim, dec_hid_dim)
+        self.v = nn.Linear(dec_hid_dim, 1, bias = False)
+        
     def forward(self, hidden, encoder_outputs, encoder_padding_mask):
-        # encoder_outputs = [src_len, batch_size, enc_output_dim]
-        # hidden = [batch_size, dec_hid_dim]
-
+        
         src_len = encoder_outputs.shape[0]
         
-        # hidden = hidden.unsqueeze(1).repeat(1, src_len, 1) # hidden = [batch_size, src_len, dec_hid_dim]
-        # encoder_outputs = encoder_outputs.permute(1, 0, 2) # encoder_outputs = [batch_size, src_len, enc_output_dim]
-        # energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim = 2))) # [batch_size, src_len, dec_hid_dim]
-        # attention = self.v(energy).squeeze() # [batch_size, src_len]
-        hidden = self.input_proj(hidden)
-        proj_hidden = hidden.unsqueeze(1).repeat(1, src_len, 1) # hidden = [batch_size, src_len, enc_out_dim]
-        encoder_outputs = encoder_outputs.permute(1, 0, 2) # encoder_outputs = [batch_size, src_len, enc_output_dim]
-        attention = (encoder_outputs * proj_hidden).sum(dim=2) # [batch_size, src_len]
+        hidden = hidden.unsqueeze(1).repeat(1, src_len, 1)
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        energy = torch.tanh(self.attn(torch.cat((hidden, encoder_outputs), dim = 2))) 
+        attention = self.v(energy).squeeze(2)
         attention = (
                 attention.float()
                 .masked_fill_(encoder_padding_mask, float("-inf"))
                 .type_as(attention)
             )
-        attention = F.softmax(attention, dim=1) # [batch_size, src_len]
-        weighted = (encoder_outputs * attention.unsqueeze(2)).sum(dim=1) # [batch_size, enc_output_dim]
-        output = torch.tanh(self.output_proj(torch.cat((weighted, hidden), dim=1))) # # [batch_size, dec_hid_dim]
-        return output
-     
+        return F.softmax(attention, dim=1)
 
-class FairseqLSTMDecoder(nn.Module):
+
+class LSTMDecoder(nn.Module):
     def __init__(self, output_dim, emb_dim, enc_out_dim, dec_hid_dim, dec_n_layer, dropout, attention):
         super().__init__()
 
@@ -201,34 +189,43 @@ class FairseqLSTMDecoder(nn.Module):
 
         self.embedding = nn.Embedding(output_dim, emb_dim)
         
-        self.rnn1 = nn.LSTMCell(dec_hid_dim + emb_dim, dec_hid_dim)
-        self.rnn2 = nn.LSTMCell(dec_hid_dim, dec_hid_dim)
+        self.rnn1 = nn.GRU(enc_out_dim + emb_dim, dec_hid_dim)
+        self.rnn2 = nn.GRU(enc_out_dim + dec_hid_dim, dec_hid_dim)
 
-        self.fc_out = nn.Linear(dec_hid_dim, output_dim)
+        self.fc_out = nn.Linear(enc_out_dim + dec_hid_dim + emb_dim, output_dim)
         
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, input, input_feed, hidden1, cell1, hidden2, cell2, encoder_outputs, encoder_padding_mask):
+    def forward(self, input, hidden1, hidden2, encoder_outputs, encoder_padding_mask):
         
         # hidden1, hidden2 = [batch size, dec hid dim]
-        input = input
+        input = input.unsqueeze(0)
         
-        embedded = self.dropout(self.embedding(input)) #embedded = [batch size, emb_dim]
+        embedded = self.dropout(self.embedding(input)) #embedded = [1, batch size, emb_dim]
+       
+        a = self.attention(hidden1, encoder_outputs, encoder_padding_mask)
+        # a = self.attention(embedded.squeeze(0), encoder_outputs)
+        a = a.unsqueeze(1)
+        
+        encoder_outputs = encoder_outputs.permute(1, 0, 2)
+        
+        weighted = torch.bmm(a, encoder_outputs)
+        weighted = weighted.permute(1, 0, 2)
 
-        rnn1_input = torch.cat((embedded, input_feed), dim = 1) #embedded = [batch size, emb_dim + dec_hid_dim]
+        rnn1_input = torch.cat((embedded, weighted), dim = 2)
     
-        hidden1, cell1 = self.rnn1(rnn1_input, (hidden1, cell1))
+        output1, hidden1 = self.rnn1(rnn1_input, hidden1.unsqueeze(0))
     
-        rnn2_input = self.dropout(hidden1)
-        hidden2, cell2 = self.rnn2(rnn2_input, (hidden2, cell2))
+        rnn2_input = torch.cat((output1, weighted), dim = 2)
+        output2, hidden2 = self.rnn2(rnn2_input, hidden2.unsqueeze(0))
         
-        input_feed = self.attention(hidden2, encoder_outputs, encoder_padding_mask) # [batch_size, dec_hid_dim]
-        input_feed = self.dropout(input_feed)
-
-        prediction = self.fc_out(input_feed)
-        prediction = self.dropout(prediction)
+        embedded = embedded.squeeze(0)
+        output2 = output2.squeeze(0)
+        weighted = weighted.squeeze(0)
         
-        return prediction, hidden1, cell1, hidden2, cell2, input_feed
+        prediction = self.fc_out(torch.cat((output2, weighted, embedded), dim = 1))
+    
+        return prediction, hidden1.squeeze(0), hidden2.squeeze(0)
 
 
 class HybridNMT(nn.Module):
@@ -239,7 +236,7 @@ class HybridNMT(nn.Module):
         self.decoder = decoder
         self.device = device
     
-    def forward(self, src, src_mask, trg, teacher_forcing_ratio = 0.5):
+    def forward(self, src, src_mask, trg, trg_mask, teacher_forcing_ratio = 0.5):
        
         batch_size = src.shape[1]
         trg_len = trg.shape[0]
@@ -248,7 +245,7 @@ class HybridNMT(nn.Module):
         dec_hid_dim = self.decoder.dec_hid_dim
 
         # initial hidden vector for n_layer lstm
-        hidden1 = hidden2 = cell1 = cell2 = input_feed = torch.zeros(batch_size, dec_hid_dim).to(self.device)
+        hidden1 = hidden2 = torch.zeros(batch_size, dec_hid_dim).to(self.device)
         #tensor to store decoder outputs
         outputs = torch.ones(trg_len, batch_size, trg_vocab_size).to(self.device) 
 
@@ -259,7 +256,7 @@ class HybridNMT(nn.Module):
      
         for t in range(1, trg_len):
             
-            output, hidden1, cell1, hidden2, cell2, input_feed = self.decoder(input, input_feed, hidden1, cell1, hidden2, cell2, encoder_outputs, src_mask)
+            output, hidden1, hidden2 = self.decoder(input, hidden1, hidden2, encoder_outputs, src_mask)
             outputs[t] = output
 
             teacher_force = random.random() < teacher_forcing_ratio
@@ -287,12 +284,15 @@ def collate_fn(batch):
     src_ids = torch.tensor([example['src_ids'] for example in batch], dtype=torch.long)
     src_mask = torch.tensor([example['src_mask'] for example in batch], dtype=torch.bool)
     trg_ids = torch.tensor([example['trg_ids'] for example in batch], dtype=torch.long)
+    trg_mask = torch.tensor([example['trg_mask'] for example in batch], dtype=torch.bool)
     
 
 
     return {"src_ids": src_ids,
             "src_mask": src_mask,
-            "trg_ids": trg_ids}
+            "trg_ids": trg_ids,
+            "trg_mask": trg_mask
+            }
 
 
 class MyDataset(Dataset):
@@ -301,10 +301,12 @@ class MyDataset(Dataset):
         self.data = data
 
     def __getitem__(self, index):
-        src_ids, src_mask, trg_ids = self.data[index]
+        src_ids, src_mask, trg_ids, trg_mask = self.data[index]
         return {"src_ids": src_ids,
                 "src_mask": src_mask,
-                "trg_ids": trg_ids}
+                "trg_ids": trg_ids,
+                "trg_mask": trg_mask,
+                }
 
     def __len__(self):
         return len(self.data)
@@ -335,13 +337,14 @@ def train(args, logger, model, train_iterator, valid_iterator, optimizer, criter
         src = batch['src_ids'].to(args.device)
         src_mask = batch['src_mask'].to(args.device)
         trg = batch['trg_ids'].to(args.device)
+        trg_mask = batch['trg_mask'].to(args.device)
         
         src = torch.transpose(src, 1, 0) # src = [src_len, batch_size]
         trg = torch.transpose(trg, 1, 0) # trg = [trg_len, batch_size]
 
         optimizer.zero_grad()
         
-        output = model(src, src_mask, trg)
+        output = model(src, src_mask, trg, trg_mask)
 
         #trg = [trg len, batch size]
         #output = [trg len, batch size, output dim]
@@ -390,11 +393,12 @@ def evaluate(args, logger, model, iterator, criterion):
             src = batch['src_ids'].to(args.device) # src = [batch_size, src_len]
             src_mask = batch['src_mask'].to(args.device) # src_mask (src_padding_mask) = [batch_size, src_len]
             trg = batch['trg_ids'].to(args.device) # trg_mask = [batch_size, trg_len]
+            trg_mask = batch['trg_mask'].to(args.device)
 
             src = torch.transpose(src, 1, 0) # src = [src_len, batch_size]
             trg = torch.transpose(trg, 1, 0) # trg = [trg_len, batch_size]
 
-            output = model(src, src_mask, trg, 0) #turn off teacher forcing
+            output = model(src, src_mask, trg, trg_mask, 0) #turn off teacher forcing
             #trg = [trg len, batch size]
             #output = [trg len, batch size, output dim]
 
@@ -435,11 +439,12 @@ def main():
     logger.info('using device:{}'.format(device))
 
     # save the training and valid loss to plot training curve
-    args.iter_save_file_path = f"./loss/Fairseq_shuffle{str(args.shuffle)}_iter{args.evaluate_step}_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.json"
-    args.iter_save_pic_path = f"./pic/Fairseq_shuffle{str(args.shuffle)}_iter{args.evaluate_step}_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
-    args.epoch_save_file_path = f"./loss/Fairseq_shuffle{str(args.shuffle)}_epoch_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.json"
-    args.epoch_save_pic_path = f"./pic/Fairseq_shuffle{str(args.shuffle)}_epoch_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
-    args.model_save_path = f"./model/Fairseq_shuffle{str(args.shuffle)}_epoch_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.pt"
+    args.iter_save_file_path = f"./loss/shuffle{str(args.shuffle)}_iter{args.evaluate_step}_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.json"
+    args.iter_save_pic_path = f"./pic/shuffle{str(args.shuffle)}_iter{args.evaluate_step}_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
+    args.epoch_save_file_path = f"./loss/shuffle{str(args.shuffle)}_epoch_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.json"
+    args.epoch_save_pic_path = f"./pic/shuffle{str(args.shuffle)}_epoch_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
+    
+    args.model_save_path = f"./model/shuffle{str(args.shuffle)}_epoch_bs{args.batch_size}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.pt"
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -473,9 +478,9 @@ def main():
     ENC_DROPOUT = args.enc_dropout
     DEC_DROPOUT = args.dec_dropout
 
-    attn = FairseqAttention(ENC_EMB_DIM, DEC_EMB_DIM, DEC_HID_DIM)
+    attn = Attention(ENC_EMB_DIM, DEC_EMB_DIM, DEC_HID_DIM)
     encoder = TFEncoder(INPUT_DIM, ENC_EMB_DIM, ENC_HID_DIM, ENC_N_HEAD, ENC_N_LAYER, ENC_DROPOUT)
-    decoder = FairseqLSTMDecoder(OUTPUT_DIM, DEC_EMB_DIM, ENC_EMB_DIM, DEC_HID_DIM, DEC_N_LAYER, DEC_DROPOUT, attn)
+    decoder = LSTMDecoder(OUTPUT_DIM, DEC_EMB_DIM, ENC_EMB_DIM, DEC_HID_DIM, DEC_N_LAYER, DEC_DROPOUT, attn)
 
     model = HybridNMT(encoder, decoder, device).to(device)
     model.apply(init_weights)
