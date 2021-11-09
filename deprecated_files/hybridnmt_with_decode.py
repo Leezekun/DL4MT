@@ -8,6 +8,7 @@ import torchtext
 from torch.utils.data import Dataset, DataLoader
 
 from preprocess import *
+from beam import beam_search_decoding, batch_beam_search_decoding
 from plot_training_curve import plot_curve
 
 import numpy as np
@@ -23,7 +24,7 @@ import logging
 
 def set_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='6', type=str, required=False, help='')
+    parser.add_argument('--device', default='7', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/train.log', type=str, required=False, help='')
 
@@ -55,7 +56,7 @@ def set_args():
     parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
     parser.add_argument('--shuffle', default=True, type=bool, required=False, help='whether to shuffle the training dataset when loading')
 
-    parser.add_argument('--evaluate_step', default=100, type=int, required=False, help='')
+    parser.add_argument('--evaluate_step', default=50, type=int, required=False, help='')
 
     parser.add_argument('--epochs', default=50, type=int, required=False, help='')
     parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
@@ -68,7 +69,11 @@ def set_args():
     parser.add_argument('--warmup_steps', type=int, default=4000, help='')
     parser.add_argument('--seed', type=int, default=1234, help='')
 
-    parser.add_argument('--pretrain', default=True, type=bool, required=False, help='')
+    parser.add_argument('--skip_train', default=False, type=bool, required=False, help='')
+
+    parser.add_argument('--beam_width', type=int, default=10)
+    parser.add_argument('--n_best', type=int, default=5)
+    parser.add_argument('--max_dec_steps', type=int, default=1000)
 
     args = parser.parse_args()
     return args
@@ -414,7 +419,7 @@ def evaluate(args, logger, model, iterator, criterion):
             src = torch.transpose(src, 1, 0) # src = [src_len, batch_size]
             trg = torch.transpose(trg, 1, 0) # trg = [trg_len, batch_size]
 
-            output, predict = model(src, src_mask, trg, 0) #turn off teacher forcing
+            output, predict = model(src, src_mask, trg) #turn off teacher forcing
             #trg = [trg len, batch size]
             #output = [trg len, batch size, output dim]
  
@@ -479,8 +484,15 @@ def main():
     assert args.source_vocab == args.target_vocab
     with open(args.source_vocab) as f:
         vocab = json.load(f)
-    
-    PAD = "<PAD>"
+
+    EOS = '<EOS>'
+    GO = '<GO>'
+    UNK = '<UNK>'
+    PAD = '<PAD>'
+
+    EOS_IDX = vocab[EOS] 
+    GO_IDX = vocab[GO]
+    UNK_IDX = vocab[UNK] 
     PAD_IDX = vocab[PAD]
 
     INPUT_DIM = OUTPUT_DIM = len(vocab)
@@ -501,45 +513,107 @@ def main():
     decoder = LSTMDecoder(OUTPUT_DIM, DEC_EMB_DIM, ENC_EMB_DIM, DEC_HID_DIM, DEC_OUT_DIM, DEC_N_LAYER, DEC_DROPOUT, attn)
 
     model = HybridNMT(INPUT_DIM, EMB_DIM, DEC_DROPOUT, encoder, decoder, device).to(device)
-    if args.pretrain: 
-        model.load_state_dict(torch.load(args.model_save_path))
-    # best_model_save_path = "./model/best_whole_model/hybridnmt.pt"
-    # torch.save(model, best_model_save_path)
-    # exit()
+    model.load_state_dict(torch.load(args.model_save_path))
+    torch.save(model, f"./model/best_whole_model/hybridnmt.pt") 
+
     logger.info(f'The model has {count_parameters(model):,} trainable parameters')
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, eps=args.eps, weight_decay=args.weight_decay)
-    criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
-    best_valid_loss = float('inf')
+    if not args.skip_train:
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, eps=args.eps, weight_decay=args.weight_decay)
+        criterion = nn.CrossEntropyLoss(ignore_index = PAD_IDX)
+        best_valid_loss = float('inf')
 
-    iter_loss_list = []
-    epoch_loss_list = []
+        iter_loss_list = []
+        epoch_loss_list = []
 
-    for epoch in range(args.epochs):
+        for epoch in range(args.epochs):
+            
+            start_time = time.time()
+
+            train_loss, train_acc, iter_loss_list = train(args, logger, model, train_iterator, valid_iterator, optimizer, criterion, iter_loss_list)
+            valid_loss, valid_acc = evaluate(args, logger, model, valid_iterator, criterion)
+
+            end_time = time.time()
+            
+            epoch_mins, epoch_secs = epoch_time(start_time, end_time)
+            
+            # save losses in json and plot curve 
+            epoch_loss_list.append((train_loss, valid_loss))
+            with open(args.epoch_save_file_path, "w") as f:
+                json.dump(epoch_loss_list, f)
+            plot_curve(args, "epoch")
+
+            if valid_loss < best_valid_loss:
+                best_valid_loss = valid_loss
+                torch.save(model.state_dict(), args.model_save_path)
+            
+            logger.info(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s')
+            logger.info(f'\tTrain Loss: {train_loss:.3f}, Train Acc: {train_acc:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
+            logger.info(f'\tVal. Loss: {valid_loss:.3f}, Val. Acc: {valid_acc:.3f}|  Val. PPL: {math.exp(valid_loss):7.3f}')
+
+    else:
+        model.eval()
+        with torch.no_grad():
+            for batch_id, batch in enumerate(valid_iterator):
+                src = batch['src_ids'].to(args.device)
+                src_mask = batch['src_mask'].to(args.device)
+                trg = batch['trg_ids'].to(args.device)
+                trg_mask = batch['trg_mask'].to(args.device)
         
-        start_time = time.time()
+                ground_truth = trg 
 
-        train_loss, train_acc, iter_loss_list = train(args, logger, model, train_iterator, valid_iterator, optimizer, criterion, iter_loss_list)
-        valid_loss, valid_acc = evaluate(args, logger, model, valid_iterator, criterion)
+                src = torch.transpose(src, 1, 0) # src = [src_len, batch_size]
+                trg = torch.transpose(trg, 1, 0) # trg = [trg_len, batch_size]
 
-        end_time = time.time()
-        
-        epoch_mins, epoch_secs = epoch_time(start_time, end_time)
-        
-        # save losses in json and plot curve 
-        epoch_loss_list.append((train_loss, valid_loss))
-        with open(args.epoch_save_file_path, "w") as f:
-            json.dump(epoch_loss_list, f)
-        plot_curve(args, "epoch")
+                hidden1 = hidden2 = cell1 = cell2 = torch.zeros(args.batch_size, model.decoder.dec_hid_dim).to(args.device)
+                input_feed = torch.zeros(args.batch_size, model.decoder.dec_out_dim).to(args.device)
 
-        if valid_loss < best_valid_loss:
-            best_valid_loss = valid_loss
-            # torch.save(model.state_dict(), args.model_save_path)
-            torch.save(model, args.model_save_path)
+                src = model.embedding(src) * math.sqrt(model.emb_dim) #src = [src_len, batch_size, emb_dim]
+                # src = self.dropout(src)
+                enc_outs = model.encoder(src, src_mask) # (T, bs, H), (bs, H)
+                # decoded_seqs: (bs, T)
 
-        logger.info(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s')
-        logger.info(f'\tTrain Loss: {train_loss:.3f}, Train Acc: {train_acc:.3f} | Train PPL: {math.exp(train_loss):7.3f}')
-        logger.info(f'\tVal. Loss: {valid_loss:.3f}, Val. Acc: {valid_acc:.3f}|  Val. PPL: {math.exp(valid_loss):7.3f}')
+                # start_time = time.time()
+                # decoded_seqs = beam_search_decoding(decoder=model.decoder,
+                #                                     enc_outs=enc_outs,
+                #                                     enc_masks=src_mask,
+                #                                     dec_hiddens1=hidden1,
+                #                                     dec_cells1=cell1,
+                #                                     dec_hiddens2=hidden2,
+                #                                     dec_cells2=cell2,
+                #                                     dec_input_feeds=input_feed,
+                #                                     embeddings=model.embedding,
+                #                                     beam_width=args.beam_width,
+                #                                     n_best=args.n_best,
+                #                                     sos_token=GO_IDX,
+                #                                     eos_token=EOS_IDX,
+                #                                     max_dec_steps=args.max_dec_steps,
+                #                                     device=args.device)
+                # end_time = time.time()
+                # print(f'for loop beam search time: {end_time-start_time:.3f}')
+                # print("beam search:", decoded_seqs[0])
+                # print("ground truth:", ground_truth[0])
+
+                start_time = time.time()
+                decoded_seqs = batch_beam_search_decoding(decoder=model.decoder,
+                                                    enc_outs=enc_outs,
+                                                    enc_masks=src_mask,
+                                                    dec_hiddens1=hidden1,
+                                                    dec_cells1=cell1,
+                                                    dec_hiddens2=hidden2,
+                                                    dec_cells2=cell2,
+                                                    dec_input_feeds=input_feed,
+                                                    embeddings=model.embedding,
+                                                    beam_width=args.beam_width,
+                                                    n_best=args.n_best,
+                                                    sos_token=GO_IDX,
+                                                    eos_token=EOS_IDX,
+                                                    max_dec_steps=args.max_dec_steps,
+                                                    device=args.device)
+                end_time = time.time()
+                print(f'for batch beam search time: {end_time-start_time:.3f}')
+                print("batch beam search:", decoded_seqs[0])
+                print("ground truth:", ground_truth[0])
 
 
 if __name__ == '__main__':
