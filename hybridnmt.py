@@ -503,9 +503,9 @@ def main():
     model = HybridNMT(INPUT_DIM, EMB_DIM, DEC_DROPOUT, encoder, decoder, device).to(device)
     if args.pretrain: 
         model.load_state_dict(torch.load(args.model_save_path))
-    # best_model_save_path = "./model/best_whole_model/hybridnmt.pt"
-    # torch.save(model, best_model_save_path)
-    # exit()
+    best_model_save_path = "./model/best_whole_model/hybridnmt.pt"
+    torch.save(model, best_model_save_path)
+    exit()
     logger.info(f'The model has {count_parameters(model):,} trainable parameters')
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, eps=args.eps, weight_decay=args.weight_decay)

@@ -186,9 +186,9 @@ def main():
     bleu_score = bleu.corpus_score(sys, ref)
     print(bleu_score)
 
-    f1 = open("ref.txt", "w")
-    f2 = open("sys.txt", "w")
-    f3 = open("translation.txt", "w")
+    f1 = open("./data/ref.txt", "w")
+    f2 = open("./data/sys.txt", "w")
+    f3 = open("./data/translation.txt", "w")
     for i in range(len(sys)):
         sys_sent = sys[i]
         ref_sent = ref[i][0]

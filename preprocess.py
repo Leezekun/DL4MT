@@ -118,18 +118,17 @@ def clean_data():
 
     f1 = open("./data/dev.en", "w")
     f2 = open("./data/dev.ha", "w")
-    with open("./dev/xml/newsdev2021.en-ha.en", "r") as f:
+    with open("./data/dev/xml/newsdev2021.en-ha.en", "r") as f:
         data = f.readlines()
         for d in data:
             f1.write(d.lower())
     f1.close()
-    with open("./dev/xml/newsdev2021.en-ha.ha", "r") as f:
+    with open("./data/dev/xml/newsdev2021.en-ha.ha", "r") as f:
         data = f.readlines()
         for d in data:
             f2.write(d.lower())
     f2.close()
     
-
 
 def create_data(args, logger):
     

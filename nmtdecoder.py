@@ -20,29 +20,25 @@ def set_args():
     parser.add_argument('--device', default='7', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/decode.log', type=str, required=False, help='')
-    parser.add_argument('--train_file', default='./data/train.pkl', type=str, required=False, help='')
-    parser.add_argument('--dev_file', default='./data/dev.pkl', type=str, required=False, help='')
-    parser.add_argument('--output_file', default='./data/translation.txt', type=str, required=False, help='')
-    parser.add_argument('--batch', default=True, type=bool, required=False, help='')
-    parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
-    parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
 
     parser.add_argument('--max_src_len', default=128, type=int, required=False, help='')
     parser.add_argument('--max_trg_len', default=128, type=int, required=False, help='')
-
     parser.add_argument('--best_model_save_path', default="./model/best_whole_model/hybridnmt.pt", type=str, required=False, help='')
     parser.add_argument('--codes_file', default="./data/codes.en-ha", type=str, required=False, help='')
     parser.add_argument('--source_vocab_file', default="./data/vocab.en", type=str, required=False, help='')
     parser.add_argument('--target_vocab_file', default="./data/vocab.ha", type=str, required=False, help='')
 
-    parser.add_argument('-i', default='./data/source.txt', type=str, required=False, help='')
-    parser.add_argument('-o', default='./data/target.txt', type=str, required=False, help='')
-    parser.add_argument('-eval', default='', type=str, required=False, help='')
-    parser.add_argument('-dict', default='./data/joint_vocab.json', type=str, required=False, help='')
-
+    parser.add_argument('--batch', default=True, type=bool, required=False, help='')
+    parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
+    parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
     parser.add_argument('--beam_width', type=int, default=10)
     parser.add_argument('--n_best', type=int, default=5)
     parser.add_argument('--max_dec_steps', type=int, default=1000)
+
+    parser.add_argument('-i', default='./data/dev/xml/newsdev2021.en-ha.xml', type=str, required=False, help='')
+    parser.add_argument('-o', default='./data/output.txt', type=str, required=False, help='')
+    parser.add_argument('-eval', default='BLEU', type=str, required=False, help='')
+    parser.add_argument('-dict', default='./data/joint_vocab.json', type=str, required=False, help='')
 
     args = parser.parse_args()
     return args
@@ -80,12 +76,15 @@ def main():
     logger = create_logger(args)
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device
-
     args.cuda = torch.cuda.is_available() and not args.no_cuda
     device = 'cuda' if args.cuda else 'cpu'
     args.device = device
     logger.info('using device:{}'.format(device))
 
+    input_file = args.i
+    output_file = args.o
+
+    # load vocab
     with open(args.dict) as f:
         vocab = json.load(f)
     f.close()
@@ -96,39 +95,38 @@ def main():
     for k, v in str2idx.items():
         idx2token[v] = k
 
+    # prepare tokens
     EOS = '<EOS>'
     GO = '<GO>'
     UNK = '<UNK>'
     PAD = '<PAD>'
-
     EOS_IDX = vocab[EOS] 
     GO_IDX = vocab[GO]
     UNK_IDX = vocab[UNK] 
     PAD_IDX = vocab[PAD]
-    
-    bleu = BLEU()
-    
+
+    # load model    
     model = torch.load(args.best_model_save_path)
     model.eval()
-    
-    sys = []
-    ref = []
 
-    input_file = args.i
-    output_file = args.o
-
+    # process the input data
     if input_file[-4:] == '.xml':
         cmd = f'wmt-unwrap -o test_data < {input_file}'
         os.system(cmd)
-    source = "test_data.en"
-    
-    # process the input data
-    tokenize_cmd = f"subword-nmt apply-bpe -c {args.codes_file} --vocabulary {args.source_vocab_file} --vocabulary-threshold 50 < {args.i} > {args.i}.BPE"
-    os.system(tokenize_cmd)
+        source_data = "test_data.en"
+        ref_data = "test_data.ha"
+    else:
+        source_data = input_file
+        ref_data = None
+
+    tokenized_source_data = "./data/source_data.BPE.en"
+
+    cmd = f"subword-nmt apply-bpe -c {args.codes_file} --vocabulary {args.source_vocab_file} --vocabulary-threshold 50 < {source_data} > {tokenized_source_data}"
+    os.system(cmd)
 
     processed_data = []
-    with open(f"{args.i}.BPE", "r") as f:
-        src = f.readline()
+    for line in open(tokenized_source_data, "r"):
+        src = line
         src = re.sub('\s+'," ", src)
         src = src.split()
         src_tok_ids = np.ones([args.max_src_len], dtype=int) * PAD_IDX
@@ -150,20 +148,15 @@ def main():
         processed_data.append((src_tok_ids, src_padding_ids))
 
     my_dataset = MyDataset(processed_data)
-    iterator = DataLoader(my_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn, drop_last=True)
+    iterator = DataLoader(my_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False)
 
-
+    # start inference
+    sys = []
     with torch.no_grad():
         for batch_id, batch in enumerate(iterator):
             src = batch['src_ids'].to(args.device)
             src_mask = batch['src_mask'].to(args.device)
-            trg = batch['trg_ids'].to(args.device)
-            trg_mask = batch['trg_mask'].to(args.device)
-    
-            ground_truth = trg 
-
             src = torch.transpose(src, 1, 0) # src = [src_len, batch_size]
-            trg = torch.transpose(trg, 1, 0) # trg = [trg_len, batch_size]
 
             hidden1 = hidden2 = cell1 = cell2 = torch.zeros(args.batch_size, model.decoder.dec_hid_dim).to(args.device)
             input_feed = torch.zeros(args.batch_size, model.decoder.dec_out_dim).to(args.device)
@@ -209,7 +202,6 @@ def main():
                 end_time = time.time()
                 print(f'Batch:{batch_id}, for batch beam search time: {end_time-start_time:.3f}')
 
-            
             for bid, decoded_seq in enumerate(decoded_seqs):
                 tokens = decoded_seq[0] # only use the top one
                 sentence = []
@@ -227,25 +219,22 @@ def main():
                 sentence = " ".join(sentence)
                 sys.append(sentence)
 
-            trg = batch['trg_ids'].tolist()
-            for bid, target in enumerate(trg):
-                tokens = target # only use the top one
-                sentence = []
-                word = ""
-                for tid, token in enumerate(tokens[1:]):
-                    if token == EOS_IDX:
-                        break
-                    token = idx2token[token]
-                    if token[-2:] == '@@': 
-                        word += token[:-2]
-                    else:
-                        word += token
-                        sentence.append(word)
-                        word = ""
-                sentence = " ".join(sentence)
-                ref.append([sentence])
-    
-    
+    # evaluate or simply save the hypo to output_file
+    if args.eval == "BLEU" and ref_data:
+        bleu = BLEU()
+        
+        ref = []
+        for line in open(ref_data, "r"):
+            ref.append([line.strip()])
+
+        bleu_score = bleu.corpus_score(sys, ref)
+
+        with open(output_file, "w") as f:
+            f.write(f"BLEU Score: {bleu_score}")
+    else:
+        with open(output_file, "w") as f:
+            for s in sys:
+                f.write(s+"\n")
 
 
 if __name__ == '__main__':
