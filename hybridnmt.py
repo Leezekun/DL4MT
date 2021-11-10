@@ -4,7 +4,6 @@ from torch import Tensor
 import torch.nn.functional as F
 from torch.nn import TransformerEncoder, TransformerEncoderLayer
 import torch.optim as optim
-import torchtext
 from torch.utils.data import Dataset, DataLoader
 
 from preprocess import *
@@ -23,7 +22,7 @@ import logging
 
 def set_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='6', type=str, required=False, help='')
+    parser.add_argument('--device', default='2', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/train.log', type=str, required=False, help='')
 
@@ -32,6 +31,8 @@ def set_args():
     parser.add_argument('--dev_source_dataset', default='./data/dev.BPE.en', type=str, required=False, help='')
     parser.add_argument('--dev_target_dataset', default='./data/dev.BPE.ha', type=str, required=False, help='')
     
+    parser.add_argument('--pretrained_model', default='./model/best_whole_model/hybridnmt2.pt', type=str, required=False, help='')
+
     parser.add_argument('--train_file', default='./data/train.pkl', type=str, required=False, help='')
     parser.add_argument('--dev_file', default='./data/dev.pkl', type=str, required=False, help='')
 
@@ -55,11 +56,11 @@ def set_args():
     parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
     parser.add_argument('--shuffle', default=True, type=bool, required=False, help='whether to shuffle the training dataset when loading')
 
-    parser.add_argument('--evaluate_step', default=100, type=int, required=False, help='')
+    parser.add_argument('--evaluate_step', default=200, type=int, required=False, help='')
 
     parser.add_argument('--epochs', default=50, type=int, required=False, help='')
-    parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
-    parser.add_argument('--lr', default=5.0e-04, type=float, required=False, help='learning rate')
+    parser.add_argument('--batch_size', default=512, type=int, required=False, help='')
+    parser.add_argument('--lr', default=1.0e-03, type=float, required=False, help='learning rate')
     parser.add_argument('--eps', default=1.0e-06, type=float, required=False, help='')
     parser.add_argument('--weight_decay', default=1.0e-06, type=float, required=False, help='')
     parser.add_argument('--gradient_accumulation_steps', default=4, type=int, required=False, help='')
@@ -414,7 +415,7 @@ def evaluate(args, logger, model, iterator, criterion):
             src = torch.transpose(src, 1, 0) # src = [src_len, batch_size]
             trg = torch.transpose(trg, 1, 0) # trg = [trg_len, batch_size]
 
-            output, predict = model(src, src_mask, trg, 0) #turn off teacher forcing
+            output, predict = model(src, src_mask, trg) #turn off teacher forcing
             #trg = [trg len, batch size]
             #output = [trg len, batch size, output dim]
  
@@ -463,7 +464,7 @@ def main():
     args.iter_save_pic_path = f"./pic/iter{args.evaluate_step}_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
     args.epoch_save_file_path = f"./loss/epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.json"
     args.epoch_save_pic_path = f"./pic/epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
-    args.model_save_path = f"./model/epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.pt"
+    args.model_save_path = f"./model/whole_model_epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.pt"
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -502,10 +503,10 @@ def main():
 
     model = HybridNMT(INPUT_DIM, EMB_DIM, DEC_DROPOUT, encoder, decoder, device).to(device)
     if args.pretrain: 
-        model.load_state_dict(torch.load(args.model_save_path))
-    best_model_save_path = "./model/best_whole_model/hybridnmt.pt"
-    torch.save(model, best_model_save_path)
-    exit()
+        # model = torch.load(args.pretrained_model)
+        model = torch.load(args.model_save_path)
+        # model.load_state_dict(torch.load(args.model_save_path))
+
     logger.info(f'The model has {count_parameters(model):,} trainable parameters')
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, eps=args.eps, weight_decay=args.weight_decay)

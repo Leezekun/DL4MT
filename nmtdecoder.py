@@ -17,13 +17,13 @@ from beam import beam_search_decoding, batch_beam_search_decoding
 
 def set_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='7', type=str, required=False, help='')
+    parser.add_argument('--device', default='5', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/decode.log', type=str, required=False, help='')
 
     parser.add_argument('--max_src_len', default=128, type=int, required=False, help='')
     parser.add_argument('--max_trg_len', default=128, type=int, required=False, help='')
-    parser.add_argument('--best_model_save_path', default="./model/best_whole_model/hybridnmt.pt", type=str, required=False, help='')
+    parser.add_argument('--best_model_save_path', default="./model/best_whole_model/hybridnmt3.pt", type=str, required=False, help='')
     parser.add_argument('--codes_file', default="./data/codes.en-ha", type=str, required=False, help='')
     parser.add_argument('--source_vocab_file', default="./data/vocab.en", type=str, required=False, help='')
     parser.add_argument('--target_vocab_file', default="./data/vocab.ha", type=str, required=False, help='')
@@ -33,12 +33,13 @@ def set_args():
     parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
     parser.add_argument('--beam_width', type=int, default=10)
     parser.add_argument('--n_best', type=int, default=5)
-    parser.add_argument('--max_dec_steps', type=int, default=1000)
+    parser.add_argument('--max_dec_steps', type=int, default=5000)
 
-    parser.add_argument('-i', default='./data/dev/xml/newsdev2021.en-ha.xml', type=str, required=False, help='')
+    parser.add_argument('-i', default='./data/test/newstest2021.en-ha.xml', type=str, required=False, help='')
     parser.add_argument('-o', default='./data/output.txt', type=str, required=False, help='')
     parser.add_argument('-eval', default='BLEU', type=str, required=False, help='')
     parser.add_argument('-dict', default='./data/joint_vocab.json', type=str, required=False, help='')
+    parser.add_argument('-p', default=True, action='store_true', help='')
 
     args = parser.parse_args()
     return args
@@ -68,6 +69,23 @@ def collate_fn(batch):
     return {"src_ids": src_ids,
             "src_mask": src_mask
             }
+
+
+def detokenize(tokens, eos_token, idx2token):
+    sentence = []
+    word = ""
+    for tid, token in enumerate(tokens[1:]):
+        if token == eos_token:
+            break
+        token = idx2token[token]
+        if token[-2:] == '@@': 
+            word += token[:-2]
+        else:
+            word += token
+            sentence.append(word)
+            word = ""
+    sentence = " ".join(sentence)
+    return sentence
 
 
 def main():
@@ -111,10 +129,10 @@ def main():
 
     # process the input data
     if input_file[-4:] == '.xml':
-        cmd = f'wmt-unwrap -o test_data < {input_file}'
+        cmd = f'wmt-unwrap -o ./data/test_data < {input_file}'
         os.system(cmd)
-        source_data = "test_data.en"
-        ref_data = "test_data.ha"
+        source_data = "./data/test_data.en"
+        ref_data = "./data/test_data.ha"
     else:
         source_data = input_file
         ref_data = None
@@ -126,7 +144,7 @@ def main():
 
     processed_data = []
     for line in open(tokenized_source_data, "r"):
-        src = line
+        src = line.lower()
         src = re.sub('\s+'," ", src)
         src = src.split()
         src_tok_ids = np.ones([args.max_src_len], dtype=int) * PAD_IDX
@@ -150,7 +168,7 @@ def main():
     my_dataset = MyDataset(processed_data)
     iterator = DataLoader(my_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False)
 
-    # start inference
+    # start decoding
     sys = []
     with torch.no_grad():
         for batch_id, batch in enumerate(iterator):
@@ -204,33 +222,47 @@ def main():
 
             for bid, decoded_seq in enumerate(decoded_seqs):
                 tokens = decoded_seq[0] # only use the top one
-                sentence = []
-                word = ""
-                for tid, token in enumerate(tokens[1:]):
-                    if token == EOS_IDX:
-                        break
-                    token = idx2token[token]
-                    if token[-2:] == '@@': 
-                        word += token[:-2]
-                    else:
-                        word += token
-                        sentence.append(word)
-                        word = ""
-                sentence = " ".join(sentence)
+                sentence = detokenize(tokens, EOS_IDX, idx2token)
                 sys.append(sentence)
 
     # evaluate or simply save the hypo to output_file
     if args.eval == "BLEU" and ref_data:
         bleu = BLEU()
-        
+
+        # load the ref sentences
         ref = []
+        num_sent = 0
+        num_empty = 0
         for line in open(ref_data, "r"):
-            ref.append([line.strip()])
+            num_sent += 1
+            str_sentence = line.lower().strip()
+            if args.processed:
+                processed_sent = process_string(str_sentence)
+                if processed_sent: 
+                    ref.append(processed_sent)
+                else:
+                    print(f"Empty sentences after processed: {str_sentence}")
+                    num_empty += 1
+                    ref.append(str_sentence)
+            else:
+                ref.append(str_sentence)
+        if args.processed: print(f"Number of empty sentences after processed: {num_empty}/{num_sent}")
 
-        bleu_score = bleu.corpus_score(sys, ref)
+        refs = [ref]
 
-        with open(output_file, "w") as f:
-            f.write(f"BLEU Score: {bleu_score}")
+        bleu_score = bleu.corpus_score(sys, refs)
+        print(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}")
+        
+        # my own debugging file
+        with open("./data/translation.txt", "w") as f:
+            for i in range(len(sys)):
+                f.write(f"Sys: {sys[i]}\n")
+                f.write(f"Ref: {ref[i]}\n")
+                f.write("\n")
+            f.write(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}") 
+
+        with open(output_file, "w") as f:  
+            f.write(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}") 
     else:
         with open(output_file, "w") as f:
             for s in sys:
