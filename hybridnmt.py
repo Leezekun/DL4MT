@@ -31,7 +31,7 @@ def set_args():
     parser.add_argument('--dev_source_dataset', default='./data/dev.BPE.en', type=str, required=False, help='')
     parser.add_argument('--dev_target_dataset', default='./data/dev.BPE.ha', type=str, required=False, help='')
     
-    parser.add_argument('--pretrained_model', default='./model/best_whole_model/hybridnmt2.pt', type=str, required=False, help='')
+    parser.add_argument('--pretrained_model', default='./model/best_whole_model/hybridnmt.pt', type=str, required=False, help='')
 
     parser.add_argument('--train_file', default='./data/train.pkl', type=str, required=False, help='')
     parser.add_argument('--dev_file', default='./data/dev.pkl', type=str, required=False, help='')

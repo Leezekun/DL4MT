@@ -23,7 +23,7 @@ def set_args():
 
     parser.add_argument('--max_src_len', default=128, type=int, required=False, help='')
     parser.add_argument('--max_trg_len', default=128, type=int, required=False, help='')
-    parser.add_argument('--best_model_save_path', default="./model/best_whole_model/hybridnmt3.pt", type=str, required=False, help='')
+    parser.add_argument('--best_model_save_path', default="./model/best_whole_model/hybridnmt.pt", type=str, required=False, help='')
     parser.add_argument('--codes_file', default="./data/codes.en-ha", type=str, required=False, help='')
     parser.add_argument('--source_vocab_file', default="./data/vocab.en", type=str, required=False, help='')
     parser.add_argument('--target_vocab_file', default="./data/vocab.ha", type=str, required=False, help='')
@@ -39,7 +39,7 @@ def set_args():
     parser.add_argument('-o', default='./data/output.txt', type=str, required=False, help='')
     parser.add_argument('-eval', default='BLEU', type=str, required=False, help='')
     parser.add_argument('-dict', default='./data/joint_vocab.json', type=str, required=False, help='')
-    parser.add_argument('-p', default=True, action='store_true', help='')
+    parser.add_argument('-processed', default=True, action='store_true', help='')
 
     args = parser.parse_args()
     return args
