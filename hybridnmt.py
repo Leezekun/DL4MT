@@ -22,7 +22,7 @@ import logging
 
 def set_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='2', type=str, required=False, help='')
+    parser.add_argument('--device', default='3', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/train.log', type=str, required=False, help='')
 
@@ -56,11 +56,11 @@ def set_args():
     parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
     parser.add_argument('--shuffle', default=True, type=bool, required=False, help='whether to shuffle the training dataset when loading')
 
-    parser.add_argument('--evaluate_step', default=200, type=int, required=False, help='')
+    parser.add_argument('--evaluate_step', default=10, type=int, required=False, help='')
 
     parser.add_argument('--epochs', default=50, type=int, required=False, help='')
-    parser.add_argument('--batch_size', default=512, type=int, required=False, help='')
-    parser.add_argument('--lr', default=1.0e-03, type=float, required=False, help='learning rate')
+    parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
+    parser.add_argument('--lr', default=5.0e-04, type=float, required=False, help='learning rate')
     parser.add_argument('--eps', default=1.0e-06, type=float, required=False, help='')
     parser.add_argument('--weight_decay', default=1.0e-06, type=float, required=False, help='')
     parser.add_argument('--gradient_accumulation_steps', default=4, type=int, required=False, help='')
@@ -464,7 +464,7 @@ def main():
     args.iter_save_pic_path = f"./pic/iter{args.evaluate_step}_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
     args.epoch_save_file_path = f"./loss/epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.json"
     args.epoch_save_pic_path = f"./pic/epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.jpg"
-    args.model_save_path = f"./model/whole_model_epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.pt"
+    args.model_save_path = f"./model/epoch_bs{args.batch_size}_decout{args.dec_out_dim}_loss_lr{args.lr}_wd{args.weight_decay}_eps{args.eps}_enc_dp{args.enc_dropout}_dec_dp{args.dec_dropout}.pt"
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -504,8 +504,8 @@ def main():
     model = HybridNMT(INPUT_DIM, EMB_DIM, DEC_DROPOUT, encoder, decoder, device).to(device)
     if args.pretrain: 
         # model = torch.load(args.pretrained_model)
-        model = torch.load(args.model_save_path)
-        # model.load_state_dict(torch.load(args.model_save_path))
+        # model = torch.load(args.model_save_path)
+        model.load_state_dict(torch.load(args.model_save_path))
 
     logger.info(f'The model has {count_parameters(model):,} trainable parameters')
 

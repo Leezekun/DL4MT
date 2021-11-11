@@ -33,7 +33,7 @@ def set_args():
     parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
     parser.add_argument('--beam_width', type=int, default=10)
     parser.add_argument('--n_best', type=int, default=5)
-    parser.add_argument('--max_dec_steps', type=int, default=5000)
+    parser.add_argument('--max_dec_steps', type=int, default=10000)
 
     parser.add_argument('-i', default='./data/test/newstest2021.en-ha.xml', type=str, required=False, help='')
     parser.add_argument('-o', default='./data/output.txt', type=str, required=False, help='')
@@ -169,6 +169,7 @@ def main():
     iterator = DataLoader(my_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, collate_fn=collate_fn, drop_last=False)
 
     # start decoding
+    decoding_start_time = time.time()
     sys = []
     with torch.no_grad():
         for batch_id, batch in enumerate(iterator):
@@ -224,6 +225,8 @@ def main():
                 tokens = decoded_seq[0] # only use the top one
                 sentence = detokenize(tokens, EOS_IDX, idx2token)
                 sys.append(sentence)
+    decoding_end_time = time.time()
+    print(f'Total time for Beam search time: {decoding_end_time-decoding_start_time:.3f}')
 
     # evaluate or simply save the hypo to output_file
     if args.eval == "BLEU" and ref_data:
@@ -233,8 +236,8 @@ def main():
         ref = []
         num_sent = 0
         num_empty = 0
+        empty_idxs = []
         for line in open(ref_data, "r"):
-            num_sent += 1
             str_sentence = line.lower().strip()
             if args.processed:
                 processed_sent = process_string(str_sentence)
@@ -243,13 +246,23 @@ def main():
                 else:
                     print(f"Empty sentences after processed: {str_sentence}")
                     num_empty += 1
-                    ref.append(str_sentence)
+                    empty_idxs.append(num_sent)
+                    # ref.append(str_sentence)
             else:
                 ref.append(str_sentence)
+            num_sent += 1
         if args.processed: print(f"Number of empty sentences after processed: {num_empty}/{num_sent}")
-
         refs = [ref]
 
+        # process the sys sentences
+        if args.processed:
+            processed_sys = []
+            for idx, s in enumerate(sys):
+                if idx not in empty_idxs:
+                    processed_sys.append(s)
+            sys = processed_sys
+
+        # calculate the bleu score
         bleu_score = bleu.corpus_score(sys, refs)
         print(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}")
         
