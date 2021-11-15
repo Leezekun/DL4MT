@@ -22,7 +22,7 @@ import logging
 
 def set_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='3', type=str, required=False, help='')
+    parser.add_argument('--device', default='6', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/train.log', type=str, required=False, help='')
 
@@ -56,10 +56,10 @@ def set_args():
     parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
     parser.add_argument('--shuffle', default=True, type=bool, required=False, help='whether to shuffle the training dataset when loading')
 
-    parser.add_argument('--evaluate_step', default=10, type=int, required=False, help='')
+    parser.add_argument('--evaluate_step', default=200, type=int, required=False, help='')
 
-    parser.add_argument('--epochs', default=50, type=int, required=False, help='')
-    parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
+    parser.add_argument('--epochs', default=200, type=int, required=False, help='')
+    parser.add_argument('--batch_size', default=512, type=int, required=False, help='')
     parser.add_argument('--lr', default=5.0e-04, type=float, required=False, help='learning rate')
     parser.add_argument('--eps', default=1.0e-06, type=float, required=False, help='')
     parser.add_argument('--weight_decay', default=1.0e-06, type=float, required=False, help='')
@@ -503,9 +503,9 @@ def main():
 
     model = HybridNMT(INPUT_DIM, EMB_DIM, DEC_DROPOUT, encoder, decoder, device).to(device)
     if args.pretrain: 
-        # model = torch.load(args.pretrained_model)
+        model = torch.load(args.pretrained_model)
         # model = torch.load(args.model_save_path)
-        model.load_state_dict(torch.load(args.model_save_path))
+        # model.load_state_dict(torch.load(args.model_save_path))
 
     logger.info(f'The model has {count_parameters(model):,} trainable parameters')
 
@@ -537,6 +537,7 @@ def main():
             best_valid_loss = valid_loss
             # torch.save(model.state_dict(), args.model_save_path)
             torch.save(model, args.model_save_path)
+            print(f"Save model in {args.model_save_path}")
 
         logger.info(f'Epoch: {epoch+1:02} | Time: {epoch_mins}m {epoch_secs}s')
         logger.info(f'\tTrain Loss: {train_loss:.3f}, Train Acc: {train_acc:.3f} | Train PPL: {math.exp(train_loss):7.3f}')

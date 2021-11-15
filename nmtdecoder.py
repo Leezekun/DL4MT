@@ -10,14 +10,13 @@ import time
 import os
 import argparse
 
-from preprocess import *
 from hybridnmt import *
 from beam import beam_search_decoding, batch_beam_search_decoding
 
 
 def set_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--device', default='5', type=str, required=False, help='')
+    parser.add_argument('--device', default='7', type=str, required=False, help='')
     parser.add_argument('--no_cuda', action='store_true', help='')
     parser.add_argument('--log_path', default='./log/decode.log', type=str, required=False, help='')
 
@@ -31,9 +30,9 @@ def set_args():
     parser.add_argument('--batch', default=True, type=bool, required=False, help='')
     parser.add_argument('--num_workers', default=8, type=int, required=False, help='')
     parser.add_argument('--batch_size', default=256, type=int, required=False, help='')
-    parser.add_argument('--beam_width', type=int, default=10)
-    parser.add_argument('--n_best', type=int, default=5)
-    parser.add_argument('--max_dec_steps', type=int, default=10000)
+    parser.add_argument('--beam_width', type=int, default=3)
+    parser.add_argument('--n_best', type=int, default=3)
+    parser.add_argument('--max_dec_steps', type=int, default=9000)
 
     parser.add_argument('-i', default='./data/test/newstest2021.en-ha.xml', type=str, required=False, help='')
     parser.add_argument('-o', default='./data/output.txt', type=str, required=False, help='')
@@ -86,6 +85,14 @@ def detokenize(tokens, eos_token, idx2token):
             word = ""
     sentence = " ".join(sentence)
     return sentence
+
+
+def process_string(str_sentence):
+    # str_sentence = remove_html(str_sentence)
+    str_sentence = remove_time(str_sentence)
+    str_sentence = remove_newline(str_sentence)
+    str_sentence = str_sentence.strip()
+    return str_sentence
 
 
 def main():
@@ -226,7 +233,8 @@ def main():
                 sentence = detokenize(tokens, EOS_IDX, idx2token)
                 sys.append(sentence)
     decoding_end_time = time.time()
-    print(f'Total time for Beam search time: {decoding_end_time-decoding_start_time:.3f}')
+    decoding_time = decoding_end_time-decoding_start_time
+    print(f'Total beam searching time: {decoding_time:.3f}')
 
     # evaluate or simply save the hypo to output_file
     if args.eval == "BLEU" and ref_data:
@@ -264,18 +272,18 @@ def main():
 
         # calculate the bleu score
         bleu_score = bleu.corpus_score(sys, refs)
-        print(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}")
-        
+        print(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, corpus-level BLEU Score: {bleu_score}, total decoding time:{decoding_time}")
+
         # my own debugging file
         with open("./data/translation.txt", "w") as f:
             for i in range(len(sys)):
                 f.write(f"Sys: {sys[i]}\n")
                 f.write(f"Ref: {ref[i]}\n")
                 f.write("\n")
-            f.write(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}") 
+            f.write(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}, total decoding time:{decoding_time}") 
 
         with open(output_file, "w") as f:  
-            f.write(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}") 
+            f.write(f"Beam width:{args.beam_width}, n_best:{args.n_best}, max_steps:{args.max_dec_steps}, Corpus-level BLEU Score: {bleu_score}, total decoding time:{decoding_time}") 
     else:
         with open(output_file, "w") as f:
             for s in sys:
